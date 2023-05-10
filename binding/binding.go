@@ -24,6 +24,7 @@ import (
 
 	"github.com/open-traffic-generator/snappi/gosnappi"
 	"github.com/openconfig/ondatra/binding/ixweb"
+	"github.com/openconfig/ondatra/binding/stcweb"
 	"google.golang.org/grpc"
 
 	gpb "github.com/openconfig/gnmi/proto/gnmi"
@@ -163,6 +164,9 @@ type ATE interface {
 	// DialIxNetwork creates a client connection to the ATE's IxNetwork endpoint.
 	DialIxNetwork(context.Context) (*IxNetwork, error)
 
+	// DialStcAgent creates a client connection to the ATE's StcAgent endpoint.
+	DialStcAgent(context.Context) (*StcAgent, error)
+
 	// DialGNMI creates a client connection to the ATE's gNMI endpoint.
 	// Implementations must append transport security options necessary to reach the server.
 	// This method must be implemented to receive gNMI from OTG but not from IxNetwork;
@@ -198,6 +202,14 @@ type IxNetwork struct {
 	// SyslogHost is an optional hostname or IP address to which IxNetwork should
 	// stream logs. If empty, syslog streaming is not enabled.
 	SyslogHost string
+}
+
+// IxNetwork provides information for an StcAgent session.
+type StcAgent struct {
+	// Session is an StcAgent session for an ATE.
+	Session     *stcweb.Session
+	ChassisHost string
+	SyslogHost  string
 }
 
 // GNOIClients stores APIs to GNOI services.

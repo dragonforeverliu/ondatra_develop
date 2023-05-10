@@ -172,6 +172,11 @@ func (a *AbstractATE) DialIxNetwork(context.Context) (*IxNetwork, error) {
 	return nil, errors.New("DialIxNetwork unimplemented")
 }
 
+// DialStcAgent returns an unimplemented error.
+func (a *AbstractATE) DialStcAgent(context.Context) (*StcAgent, error) {
+	return nil, errors.New("DialStcAgent unimplemented")
+}
+
 // DialGNMI returns an unimplemented error.
 func (a *AbstractATE) DialGNMI(context.Context, ...grpc.DialOption) (gpb.GNMIClient, error) {
 	return nil, errors.New("DialGNMI unimplemented")
