@@ -53,8 +53,9 @@ const (
 
 // StcWeb is a connection to the Ixia Web Platform.
 type StcWeb struct {
-	hostname, apiKey string
-	client           HTTPClient
+	hostname, apiSessionId string
+	client                 HTTPClient
+	cfg                    config
 }
 
 // HTTPClient makes HTTP requests.
@@ -99,9 +100,9 @@ func WithHTTPClient(client HTTPClient) Option {
 	})
 }
 
-// Connect creates a connection to Ixia Web Platform on the specified hostname.
+// Connect creates a connection to STC Web Platform on the specified hostname.
 // Unless the given options specify otherwise, StcWeb is configured as follows:
-//   - login: Ixia's default admin/admin logins
+//   - login: stcweb's default admin/admin logins
 //   - http client: http.DefaultClient
 func Connect(ctx context.Context, hostname string, opts ...Option) (*StcWeb, error) {
 	if hostname == "" {
@@ -117,41 +118,47 @@ func Connect(ctx context.Context, hostname string, opts ...Option) (*StcWeb, err
 	w := &StcWeb{
 		hostname: hostname,
 		client:   cfg.httpClient,
+		cfg:      *cfg,
 	}
-	return w, w.setAPIKey(ctx, cfg.username, cfg.password)
+	// return w, w.setAPISession(ctx, cfg.username, cfg.password)
+	return w, nil
 }
 
 // StcAgent returns a handle to the StcAgent application.
-func (ix *StcWeb) StcAgent() *StcAgent {
-	return &StcAgent{stcWeb: ix}
+func (w *StcWeb) StcAgent() *StcAgent {
+	return &StcAgent{stcWeb: w}
 }
 
 // Chassis returns a handle to the Chassis application.
-func (ix *StcWeb) Chassis() *Chassis {
-	return &Chassis{stcWeb: ix}
+func (w *StcWeb) Chassis() *Chassis {
+	return &Chassis{stcWeb: w}
 }
 
-func (ix *StcWeb) setAPIKey(ctx context.Context, username, password string) error {
+func (w *StcWeb) setAPISession(ctx context.Context, username, password string) error {
 	in := struct {
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Userid       string `json:"userid"`
+		Password     string `json:"password"`
+		Sessionname  string `json:"sessionname"`
+		StartTimeout int    `json:"start_timeout"`
 	}{
-		Username: username,
-		Password: password,
+		Userid:       username,
+		Password:     password,
+		Sessionname:  "ondatra",
+		StartTimeout: 2000,
 	}
 	out := struct {
-		APIKey string `json:"apiKey"`
+		APISession string `json:"session_id"`
 	}{}
-	if err := ix.jsonReq(ctx, post, "/api/v1/auth/session", in, &out); err != nil {
+	if err := w.jsonReq(ctx, post, "/ondatra/v1/sessions", in, &out); err != nil {
 		return fmt.Errorf("error requesting API key: %w", err)
 	}
-	ix.apiKey = out.APIKey
+	w.apiSessionId = out.APISession
 	return nil
 }
 
 // jsonReq issues a JSON HTTP request. The "in" JSON object is marshalled to
 // the request body, and the response is unmarshalled to "out" JSON object.
-func (ix *StcWeb) jsonReq(ctx context.Context, method httpMethod, path string, in, out any) error {
+func (w *StcWeb) jsonReq(ctx context.Context, method httpMethod, path string, in, out any) error {
 	var body []byte
 	if in != nil {
 		var err error
@@ -160,24 +167,24 @@ func (ix *StcWeb) jsonReq(ctx context.Context, method httpMethod, path string, i
 			return fmt.Errorf("error marshalling JSON data: %w", err)
 		}
 	}
-	status, data, err := ix.request(ctx, method, path, "application/json", body)
+	status, data, err := w.request(ctx, method, path, "application/json", body)
 	if err != nil {
 		return err
 	}
 	if status == 202 {
-		return ix.waitForAsync(ctx, data, out)
+		return w.waitForAsync(ctx, data, out)
 	}
 	return unmarshal(data, out)
 }
 
 // binaryReq issues a binary HTTP request.
-func (ix *StcWeb) binaryReq(ctx context.Context, method httpMethod, path string, content []byte) ([]byte, error) {
-	_, data, err := ix.request(ctx, method, path, "application/octet-stream", content)
+func (w *StcWeb) binaryReq(ctx context.Context, method httpMethod, path string, content []byte) ([]byte, error) {
+	_, data, err := w.request(ctx, method, path, "application/octet-stream", content)
 	return data, err
 }
 
-func (ix *StcWeb) request(ctx context.Context, method httpMethod, path, contentType string, content []byte) (int, []byte, error) {
-	url := fmt.Sprintf("https://%s%s", ix.hostname, path)
+func (w *StcWeb) request(ctx context.Context, method httpMethod, path, contentType string, content []byte) (int, []byte, error) {
+	url := fmt.Sprintf("http://%s%s", w.hostname, path)
 	var body io.Reader
 	if len(content) > 0 {
 		body = bytes.NewReader(content)
@@ -189,8 +196,8 @@ func (ix *StcWeb) request(ctx context.Context, method httpMethod, path, contentT
 	if len(content) > 0 {
 		req.Header.Set("Content-Type", contentType)
 	}
-	if ix.apiKey != "" {
-		req.Header.Set("x-api-key", ix.apiKey)
+	if w.apiSessionId != "" {
+		req.Header.Set("X-STC-API-Session", w.apiSessionId)
 	}
 
 	var resp *http.Response
@@ -208,7 +215,7 @@ func (ix *StcWeb) request(ctx context.Context, method httpMethod, path, contentT
 		retryCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		req = req.Clone(retryCtx)
-		resp, err = ix.client.Do(req)
+		resp, err = w.client.Do(req)
 		if err == nil { // if no err, do not retry
 			break
 		}
@@ -241,7 +248,7 @@ func (ix *StcWeb) request(ctx context.Context, method httpMethod, path, contentT
 	return status, data, nil
 }
 
-func (ix *StcWeb) waitForAsync(ctx context.Context, data []byte, out any) error {
+func (w *StcWeb) waitForAsync(ctx context.Context, data []byte, out any) error {
 	const pollDelay = 5 * time.Second
 	var status struct {
 		State  string          `json:"state"`
@@ -262,7 +269,7 @@ func (ix *StcWeb) waitForAsync(ctx context.Context, data []byte, out any) error 
 				return fmt.Errorf("invalid operation poll URL %q: %w", status.URL, err)
 			}
 			sleepFn(pollDelay)
-			if err := ix.jsonReq(ctx, get, pollURL.Path, nil, &status); err != nil {
+			if err := w.jsonReq(ctx, get, pollURL.Path, nil, &status); err != nil {
 				return err
 			}
 		case "COMPLETED", "SUCCESS":

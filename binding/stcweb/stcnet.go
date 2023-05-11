@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	sessionsPath = "/api/v1/sessions"
+	sessionsPath = "/ondatra/v1/sessions"
 )
 
 func sessionPath(id int) string {
@@ -46,29 +46,32 @@ type StcAgent struct {
 }
 
 // NewSession creates a new StcAgent session with the specified name.
-func (n *StcAgent) NewSession(ctx context.Context, name string) (*Session, error) {
+func (n *StcAgent) NewSession(ctx context.Context, sessionname string) (*Session, error) {
+
 	in := struct {
-		ApplicationType string `json:"applicationType"`
+		Userid       string `json:"userid"`
+		Password     string `json:"password"`
+		Sessionname  string `json:"sessionname"`
+		StartTimeout int    `json:"start_timeout"`
 	}{
-		ApplicationType: "ixnrest",
+		Userid:       n.stcWeb.cfg.username,
+		Password:     n.stcWeb.cfg.password,
+		Sessionname:  sessionname,
+		StartTimeout: 2000,
 	}
-	var out struct {
-		ID int `json:"id"`
-	}
+	out := struct {
+		APISessionId string `json:"session_id"`
+		ID           int    `json:"ID"`
+		Sessionname  string `json:"sessionname"`
+	}{}
+
 	if err := n.stcWeb.jsonReq(ctx, post, sessionsPath, in, &out); err != nil {
 		return nil, fmt.Errorf("error creating session: %w", err)
 	}
-	data := sessionData{
-		Name: encodeSessionName(name),
-	}
-	spath := sessionPath(out.ID)
-	if err := n.stcWeb.jsonReq(ctx, patch, spath, data, nil); err != nil {
-		return nil, fmt.Errorf("error naming session: %w", err)
-	}
-	if err := n.stcWeb.jsonReq(ctx, post, path.Join(spath, "operations/start"), nil, nil); err != nil {
-		return nil, fmt.Errorf("error starting session: %w", err)
-	}
-	return &Session{stcWeb: n.stcWeb, id: out.ID, name: name}, nil
+
+	n.stcWeb.apiSessionId = out.APISessionId
+
+	return &Session{stcWeb: n.stcWeb, id: out.ID, name: out.Sessionname}, nil
 }
 
 type sessionData struct {
