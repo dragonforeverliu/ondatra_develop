@@ -60,18 +60,26 @@ func (n *StcAgent) NewSession(ctx context.Context, sessionname string) (*Session
 		StartTimeout: 2000,
 	}
 	out := struct {
-		APISessionId string `json:"session_id"`
-		ID           int    `json:"ID"`
-		Sessionname  string `json:"sessionname"`
+		session_id   string `json:"session_id"`
+		session_name string `json:"session_name"`
+		user_id      string `json:"user_id"`
+		time         string `json:"time"`
+		process_id   int    `json:"process_id"`
 	}{}
 
 	if err := n.stcWeb.jsonReq(ctx, post, sessionsPath, in, &out); err != nil {
 		return nil, fmt.Errorf("error creating session: %w", err)
 	}
 
-	n.stcWeb.apiSessionId = out.APISessionId
+	log.Info("Create session ....out=", out)
 
-	return &Session{stcWeb: n.stcWeb, id: out.ID, name: out.Sessionname}, nil
+	n.stcWeb.apiSessionId = out.session_id
+
+	return &Session{stcWeb: n.stcWeb,
+		id:         out.process_id,
+		user_id:    out.user_id,
+		session_id: out.session_id,
+		name:       out.session_name}, nil
 }
 
 type sessionData struct {
@@ -135,9 +143,12 @@ func (n *StcAgent) DeleteSession(ctx context.Context, id int) error {
 
 // Session represents an StcAgent session.
 type Session struct {
-	stcWeb *StcWeb
-	id     int
-	name   string
+	stcWeb     *StcWeb
+	id         int    // the ID of a session_id
+	name       string // session_name got from stcagent
+	user_id    string // is the username from the .binding file.
+	session_id string // formate: session_name - user_id
+	time       string // got from stc, the created time.
 
 	// StcAgent doesn't like concurrent HTTP requests to the same session.
 	// Use mutex to prevent concurrency.
