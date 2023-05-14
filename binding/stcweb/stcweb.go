@@ -174,6 +174,7 @@ func (w *StcWeb) jsonReq(ctx context.Context, method httpMethod, path string, in
 	if status == 202 {
 		return w.waitForAsync(ctx, data, out)
 	}
+	log.Info("jsonReq ....data=", string(data))
 	return unmarshal(data, out)
 }
 

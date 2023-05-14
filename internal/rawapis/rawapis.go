@@ -186,6 +186,27 @@ func FetchIxNetwork(ctx context.Context, ate binding.ATE) (*binding.IxNetwork, e
 }
 
 var (
+	stcagentMu sync.Mutex
+	stcagents  = make(map[binding.ATE]*binding.StcAgent)
+)
+
+// FetchStcAgent returns the cached StcAgent client for the specified ATE.
+func FetchStcAgent(ctx context.Context, ate binding.ATE) (*binding.StcAgent, error) {
+	stcagentMu.Lock()
+	defer stcagentMu.Unlock()
+	c, ok := stcagents[ate]
+	if !ok {
+		var err error
+		c, err = ate.DialStcAgent(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error dialing StcAgent: %w", err)
+		}
+		stcagents[ate] = c
+	}
+	return c, nil
+}
+
+var (
 	otgMu sync.Mutex
 	otgs  = make(map[binding.ATE]gosnappi.GosnappiApi)
 )

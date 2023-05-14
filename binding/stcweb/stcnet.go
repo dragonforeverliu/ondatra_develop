@@ -60,11 +60,10 @@ func (n *StcAgent) NewSession(ctx context.Context, sessionname string) (*Session
 		StartTimeout: 2000,
 	}
 	out := struct {
-		session_id   string `json:"session_id"`
-		session_name string `json:"session_name"`
-		user_id      string `json:"user_id"`
-		time         string `json:"time"`
-		process_id   int    `json:"process_id"`
+		Session_id   string `json:"session_id"`
+		Session_name string `json:"session_name"`
+		User_id      string `json:"user_id"`
+		Process_id   int    `json:"process_id"`
 	}{}
 
 	if err := n.stcWeb.jsonReq(ctx, post, sessionsPath, in, &out); err != nil {
@@ -73,13 +72,13 @@ func (n *StcAgent) NewSession(ctx context.Context, sessionname string) (*Session
 
 	log.Info("Create session ....out=", out)
 
-	n.stcWeb.apiSessionId = out.session_id
+	n.stcWeb.apiSessionId = out.Session_id
 
 	return &Session{stcWeb: n.stcWeb,
-		id:         out.process_id,
-		user_id:    out.user_id,
-		session_id: out.session_id,
-		name:       out.session_name}, nil
+		id:         out.Process_id,
+		user_id:    out.User_id,
+		session_id: out.Session_id,
+		name:       out.Session_name}, nil
 }
 
 type sessionData struct {
@@ -148,7 +147,6 @@ type Session struct {
 	name       string // session_name got from stcagent
 	user_id    string // is the username from the .binding file.
 	session_id string // formate: session_name - user_id
-	time       string // got from stc, the created time.
 
 	// StcAgent doesn't like concurrent HTTP requests to the same session.
 	// Use mutex to prevent concurrency.
@@ -200,20 +198,10 @@ func (s *Session) Post(ctx context.Context, path string, in, out any) error {
 	return s.jsonReq(ctx, post, path, in, out)
 }
 
-// // Config returns the config API for this session.
-// func (s *Session) Config() *Config {
-// 	return &Config{sess: s}
-// }
-
-// // Files returns the file API for this session.
-// func (s *Session) Files() *Files {
-// 	return &Files{sess: s}
-// }
-
-// // Stats returns the statistics API for this session.
-// func (s *Session) Stats() *Stats {
-// 	return &Stats{sess: s}
-// }
+// Config returns the config API for this session.
+func (s *Session) Config() *Config {
+	return &Config{sess: s}
+}
 
 // Error represents an error reported by an StcAgent session.
 type Error struct {
