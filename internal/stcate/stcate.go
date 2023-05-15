@@ -89,6 +89,7 @@ var (
 
 type cfgClient interface {
 	Session() session
+	ImportConfig(context.Context, *stcconfig.StcCfgData, bool) error
 }
 
 type session interface {
@@ -194,6 +195,9 @@ type stcATE struct {
 
 	mu sync.Mutex
 	// gclient *stcgnmi.Client
+
+	// original binding device info
+	ate *binding.ATE
 }
 
 func (stc *stcATE) logOp(ctx context.Context, path string, opErr error, start, end time.Time) {
@@ -239,7 +243,23 @@ func (stc *stcATE) sessionErrors(ctx context.Context) []*stcweb.Error {
 	return sErrs
 }
 
-func (stc *stcATE) updateTopology(ctx context.Context, ics []*opb.InterfaceConfig) error {
+func (stc *stcATE) pushTopology(ctx context.Context, top *Topology) error {
+
+	ate_bytes, _ := json.Marshal(stc.ate)
+	top_bytes, _ := json.Marshal(top)
+	in := struct {
+		Ate      string `json:"ate"`
+		Topology string `json:"topo"`
+	}{
+		Ate:      string(ate_bytes),
+		Topology: string(top_bytes),
+	}
+
+	if err := stc.runOp(ctx, "topology/push", in, nil); err != nil {
+		return fmt.Errorf("could not apply traffic config: %w", err)
+	}
+
+	log.Infof("Topology push successfully")
 	return nil
 }
 
@@ -249,9 +269,7 @@ func (stc *stcATE) PushTopology(ctx context.Context, top *Topology) error {
 		return err
 	}
 
-	// Avoid a possible race condition with repeated config imports (b/191984474).
-	sleepFn(45 * time.Second)
-	if err := stc.updateTopology(ctx, top.Interfaces); err != nil {
+	if err := stc.pushTopology(ctx, top); err != nil {
 		return err
 	}
 	stc.operState = operStateOff
@@ -263,7 +281,7 @@ func (stc *stcATE) UpdateTopology(ctx context.Context, top *Topology) error {
 	if err := validateInterfaces(top.Interfaces); err != nil {
 		return err
 	}
-	if err := stc.updateTopology(ctx, top.Interfaces); err != nil {
+	if err := stc.pushTopology(ctx, top); err != nil {
 		return err
 	}
 	// Protocols/traffic are stopped after updating topology, restart as needed.
@@ -312,10 +330,10 @@ func (r *lspRsp) Up() bool {
 }
 
 func (stc *stcATE) startProtocols(ctx context.Context) error {
-	errStart := stc.runOp(ctx, "operations/startallprotocols", syncedOpArgs, nil)
+	errStart := stc.runOp(ctx, "topology/startallprotocols", syncedOpArgs, nil)
 	if errStart != nil {
 		log.Warningf("First attempted startallprotocols op failed: %v", errStart)
-		if errStart = stc.runOp(ctx, "operations/startallprotocols", syncedOpArgs, nil); errStart != nil {
+		if errStart = stc.runOp(ctx, "topology/startallprotocols", syncedOpArgs, nil); errStart != nil {
 			log.Warningf("Second attempted startallprotocols op failed: %v", errStart)
 		}
 	}
@@ -343,7 +361,7 @@ func (stc *stcATE) StopProtocols(ctx context.Context) error {
 		log.Infof("Protocols already stopped, not running operation on Stc.")
 		return nil
 	}
-	if err := stc.runOp(ctx, "operations/stopallprotocols", syncedOpArgs, nil); err != nil {
+	if err := stc.runOp(ctx, "topology/stopallprotocols", syncedOpArgs, nil); err != nil {
 		return fmt.Errorf("could not stop protocols: %w", err)
 	}
 	stc.operState = operStateOff
@@ -352,7 +370,7 @@ func (stc *stcATE) StopProtocols(ctx context.Context) error {
 
 // SetPortState enables/disables the given Stc port.
 func (stc *stcATE) SetPortState(ctx context.Context, port string, enabled *bool) error {
-	// if err := stc.runOp(ctx, "vport/operations/linkupdn", stcweb.OpArgs{[]string{vportID}, state}, nil); err != nil {
+	// if err := stc.runOp(ctx, "port/linkupdn", stcweb.OpArgs{[]string{vportID}, state}, nil); err != nil {
 	// 	return fmt.Errorf("error setting port state for %q: %w", port, err)
 	// }
 	return nil
@@ -389,14 +407,14 @@ func configureTraffic(ctx context.Context, stc *stcATE, flows []*opb.Flow) error
 
 func applyTraffic(ctx context.Context, stc *stcATE) error {
 	trafficArgs := stcweb.OpArgs{stc.c.Session().AbsPath("traffic")}
-	if err := stc.runOp(ctx, "traffic/operations/apply", trafficArgs, nil); err != nil {
+	if err := stc.runOp(ctx, "traffic/apply", trafficArgs, nil); err != nil {
 		return fmt.Errorf("could not apply traffic config: %w", err)
 	}
 	return nil
 }
 
 func startTraffic(ctx context.Context, stc *stcATE) error {
-	// if err := stc.runOp(ctx, "traffic/operations/start", trafficArgs, nil); err != nil {
+	// if err := stc.runOp(ctx, "traffic/start", trafficArgs, nil); err != nil {
 	// 	return fmt.Errorf("could not start traffic: %w", err)
 	// }
 	return nil
@@ -424,7 +442,7 @@ func (stc *stcATE) UpdateTraffic(ctx context.Context, flows []*opb.Flow) error {
 
 func (stc *stcATE) stopAllTraffic(ctx context.Context) error {
 	trafficArgs := stcweb.OpArgs{stc.c.Session().AbsPath("traffic")}
-	if err := stc.runOp(ctx, "traffic/operations/stop", trafficArgs, nil); err != nil {
+	if err := stc.runOp(ctx, "traffic/stop", trafficArgs, nil); err != nil {
 		return fmt.Errorf("could not stop traffic: %w", err)
 	}
 	// Wait a sufficient amount of time to ensure that traffic is stopped.
@@ -481,7 +499,7 @@ func (stc *stcATE) FetchGNMI(ctx context.Context) (gpb.GNMIClient, error) {
 func (stc *stcATE) applyOnTheFly(ctx context.Context) error {
 	const (
 		applyOnTheFlyArg = "globals/topology"
-		applyOnTheFlyOp  = "globals/topology/operations/applyonthefly"
+		applyOnTheFlyOp  = "globals/topology/applyonthefly"
 	)
 	applyOnTheFlyArgs := stcweb.OpArgs{stc.c.Session().AbsPath(applyOnTheFlyArg)}
 	if err := stc.runOp(ctx, applyOnTheFlyOp, applyOnTheFlyArgs, nil); err != nil {

@@ -53,6 +53,7 @@ func stcForATE(ctx context.Context, ate binding.ATE) (*stcATE, error) {
 		if err != nil {
 			return nil, err
 		}
+		stc.ate = &ate
 		stcs[ate] = stc
 	}
 	return stc, nil

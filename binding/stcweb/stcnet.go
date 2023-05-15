@@ -170,7 +170,7 @@ func (s *Session) String() string {
 // AbsPath returns an absolute path, given a path relative to the StcAgent session.
 // If relPath is already an absolute path, this method returns the input string.
 func (s *Session) AbsPath(relPath string) string {
-	absPrefix := path.Join(sessionPath(s.id), "StcAgent")
+	absPrefix := sessionPath(s.id)
 	if strings.HasPrefix(relPath, absPrefix) {
 		return relPath
 	}

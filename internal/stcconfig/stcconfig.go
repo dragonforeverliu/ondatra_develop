@@ -30,7 +30,10 @@ import (
 	"github.com/openconfig/ondatra/binding/stcweb"
 )
 
-type StcAgentCfg struct {
+type StcCfgData struct {
+	Ate        string `json:"ate"`
+	Interfaces string `json:"interfaces"`
+	LAGs       string `json:"lags"`
 }
 
 type stcSession interface {
@@ -66,14 +69,14 @@ func (c *Client) Session() *stcweb.Session {
 	return c.sess.(*sessionWrapper).Session
 }
 
-func (c *Client) ExportConfig(ctx context.Context) (*StcAgentCfg, error) {
+func (c *Client) ExportConfig(ctx context.Context) (*StcCfgData, error) {
 	return nil, nil
 }
 
-func (c *Client) ImportConfig(ctx context.Context, cfg *StcAgentCfg, overwrite bool) error {
+func (c *Client) ImportConfig(ctx context.Context, cfg *StcCfgData, overwrite bool) error {
 	return nil
 }
 
-func (c *Client) LastImportedConfig() *StcAgentCfg {
+func (c *Client) LastImportedConfig() *StcCfgData {
 	return nil
 }
