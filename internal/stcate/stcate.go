@@ -15,6 +15,7 @@
 package ate
 
 import (
+	b64 "encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"time"
 
 	"golang.org/x/net/context"
+	"google.golang.org/protobuf/proto"
 
 	log "github.com/golang/glog"
 	"github.com/openconfig/ondatra/binding"
@@ -221,15 +223,74 @@ func (stc *stcATE) runOp(ctx context.Context, path string, in any, out any) erro
 
 func (stc *stcATE) pushTopology(ctx context.Context, top *Topology) error {
 
-	ate_bytes, _ := json.Marshal(stc.ate)
-	top_bytes, _ := json.Marshal(top)
 	in := struct {
-		Ate      string `json:"ate"`
-		Topology string `json:"topology"`
+		Ate        binding.ATE `json:"ate"`
+		Interfaces []string    `json:"interfaces"`
+		LAGs       []string    `json:"lags"`
 	}{
-		Ate:      string(ate_bytes),
-		Topology: string(top_bytes),
+		Ate: *stc.ate,
 	}
+
+	for _, v := range top.Interfaces {
+		mv, _ := proto.Marshal(v)
+		b64s := b64.StdEncoding.EncodeToString([]byte(mv))
+		in.Interfaces = append(in.Interfaces, b64s)
+
+		// check UnMarshal
+		log.Infof("original = ", v)
+		log.Infof("Marshal = ", mv)
+		log.Infof("b64s = ", b64s)
+		x := new(opb.InterfaceConfig)
+		er := proto.Unmarshal(mv, x)
+		log.Infof("Unmarshal = ", x, " error = ", er)
+	}
+
+	for _, v := range top.LAGs {
+		mv, _ := proto.Marshal(v)
+		b64s := b64.StdEncoding.EncodeToString([]byte(mv))
+		in.LAGs = append(in.LAGs, b64s)
+	}
+
+	log.Infof("push Topology, in=", in)
+
+	stc.top = top
+
+	if err := stc.runOp(ctx, "topology/push", in, nil); err != nil {
+		return fmt.Errorf("could not apply traffic config: %w", err)
+	}
+
+	log.Infof("Topology push successfully")
+	return nil
+}
+
+func (stc *stcATE) XpushTopology(ctx context.Context, top *Topology) error {
+
+	in := struct {
+		Ate        binding.ATE `json:"ate"`
+		Interfaces [][]byte    `json:"interfaces"`
+		LAGs       [][]byte    `json:"lags"`
+	}{
+		Ate: *stc.ate,
+	}
+
+	for _, v := range top.Interfaces {
+		mv, _ := proto.Marshal(v)
+		in.Interfaces = append(in.Interfaces, mv)
+
+		// check UnMarshal
+		log.Infof("original = ", v)
+		log.Infof("Marshal = ", mv)
+		x := new(opb.InterfaceConfig)
+		er := proto.Unmarshal(mv, x)
+		log.Infof("Unmarshal = ", x, " error = ", er)
+	}
+
+	for _, v := range top.LAGs {
+		mv, _ := proto.Marshal(v)
+		in.LAGs = append(in.LAGs, mv)
+	}
+
+	log.Infof("push Topology, in=", in)
 
 	stc.top = top
 
