@@ -22,8 +22,8 @@ import (
 
 	log "github.com/golang/glog"
 	"github.com/openconfig/ondatra/binding"
-	"github.com/openconfig/ondatra/internal/ate"
 	"github.com/openconfig/ondatra/internal/events"
+	ate "github.com/openconfig/ondatra/internal/stcate"
 
 	opb "github.com/openconfig/ondatra/proto"
 )

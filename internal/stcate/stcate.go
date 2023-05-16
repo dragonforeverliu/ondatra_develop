@@ -79,12 +79,7 @@ var (
 	trafficImportTimeout = 4 * time.Minute
 	topoImportTimeout    = 3 * time.Minute
 
-	sleepFn            = time.Sleep
-	genTrafficFn       = genTraffic
-	updateFlowsFn      = updateFlows
-	configureTrafficFn = configureTraffic
-	applyTrafficFn     = applyTraffic
-	startTrafficFn     = startTraffic
+	sleepFn = time.Sleep
 )
 
 type cfgClient interface {
@@ -99,7 +94,6 @@ type session interface {
 	Get(context.Context, string, any) error
 	Patch(context.Context, string, any) error
 	Post(context.Context, string, any, any) error
-	Errors(context.Context) ([]*stcweb.Error, error)
 }
 
 type files interface {
@@ -196,8 +190,9 @@ type stcATE struct {
 	mu sync.Mutex
 	// gclient *stcgnmi.Client
 
-	// original binding device info
-	ate *binding.ATE
+	ate   *binding.ATE
+	top   *Topology
+	flows []*opb.Flow
 }
 
 func (stc *stcATE) logOp(ctx context.Context, path string, opErr error, start, end time.Time) {
@@ -206,12 +201,11 @@ func (stc *stcATE) logOp(ctx context.Context, path string, opErr error, start, e
 		status = OperStatusFailure
 	}
 	opResult := &OperResult{
-		Path:        path,
-		Status:      status,
-		Start:       start,
-		End:         end,
-		OpErr:       opErr,
-		SessionErrs: stc.sessionErrors(ctx),
+		Path:   path,
+		Status: status,
+		Start:  start,
+		End:    end,
+		OpErr:  opErr,
 		// Components:  components,
 	}
 	log.Infof(opResult.String())
@@ -225,35 +219,19 @@ func (stc *stcATE) runOp(ctx context.Context, path string, in any, out any) erro
 	return err
 }
 
-// sessionErrors returns the errors reported by the StcAgent session.
-// Does not fail if there was an error querying the session ('nil' is
-// returned both in this case and if there were no errors.)
-func (stc *stcATE) sessionErrors(ctx context.Context) []*stcweb.Error {
-	errors, err := stc.c.Session().Errors(ctx)
-	if err != nil {
-		log.Errorf("Could not fetch errors for StcAgent session: %v", err)
-		return nil
-	}
-	var sErrs []*stcweb.Error
-	for _, e := range errors {
-		if e.Level == "kError" {
-			sErrs = append(sErrs, e)
-		}
-	}
-	return sErrs
-}
-
 func (stc *stcATE) pushTopology(ctx context.Context, top *Topology) error {
 
 	ate_bytes, _ := json.Marshal(stc.ate)
 	top_bytes, _ := json.Marshal(top)
 	in := struct {
 		Ate      string `json:"ate"`
-		Topology string `json:"topo"`
+		Topology string `json:"topology"`
 	}{
 		Ate:      string(ate_bytes),
 		Topology: string(top_bytes),
 	}
+
+	stc.top = top
 
 	if err := stc.runOp(ctx, "topology/push", in, nil); err != nil {
 		return fmt.Errorf("could not apply traffic config: %w", err)
@@ -290,10 +268,7 @@ func (stc *stcATE) UpdateTopology(ctx context.Context, top *Topology) error {
 			return err
 		}
 		if stc.operState == operStateTrafficOn {
-			if err := genTrafficFn(ctx, stc); err != nil {
-				return err
-			}
-			if err := startTrafficFn(ctx, stc); err != nil {
+			if err := stc.startTraffic(ctx, stc.flows); err != nil {
 				return err
 			}
 		}
@@ -397,32 +372,58 @@ func genTraffic(ctx context.Context, stc *stcATE) error {
 // updateFlows updates frame size/rate configuration for flows after generation.
 // Assumes that StcAgent traffic items corresponding to the flows have updated
 // REST IDs.
-func updateFlows(ctx context.Context, stc *stcATE, flows []*opb.Flow) error {
+func (stc *stcATE) updateFlows(ctx context.Context, flows []*opb.Flow) error {
+	ate_bytes, _ := json.Marshal(stc.ate)
+	flows_bytes, _ := json.Marshal(flows)
+	in := struct {
+		Ate   string `json:"ate"`
+		Flows string `json:"flows"`
+	}{
+		Ate:   string(ate_bytes),
+		Flows: string(flows_bytes),
+	}
+
+	stc.flows = flows
+
+	if err := stc.runOp(ctx, "traffic/update", in, nil); err != nil {
+		return fmt.Errorf("could not start traffic: %w", err)
+	}
 	return nil
 }
 
-func configureTraffic(ctx context.Context, stc *stcATE, flows []*opb.Flow) error {
-	return nil
-}
-
-func applyTraffic(ctx context.Context, stc *stcATE) error {
-	trafficArgs := stcweb.OpArgs{stc.c.Session().AbsPath("traffic")}
-	if err := stc.runOp(ctx, "traffic/apply", trafficArgs, nil); err != nil {
+func (stc *stcATE) applyTraffic(ctx context.Context) error {
+	if err := stc.runOp(ctx, "traffic/apply", nil, nil); err != nil {
 		return fmt.Errorf("could not apply traffic config: %w", err)
 	}
 	return nil
 }
 
-func startTraffic(ctx context.Context, stc *stcATE) error {
-	// if err := stc.runOp(ctx, "traffic/start", trafficArgs, nil); err != nil {
-	// 	return fmt.Errorf("could not start traffic: %w", err)
-	// }
+func (stc *stcATE) startTraffic(ctx context.Context, flows []*opb.Flow) error {
+	ate_bytes, _ := json.Marshal(stc.ate)
+	flows_bytes, _ := json.Marshal(flows)
+	in := struct {
+		Ate   string `json:"ate"`
+		Flows string `json:"flows"`
+	}{
+		Ate:   string(ate_bytes),
+		Flows: string(flows_bytes),
+	}
+
+	stc.flows = flows
+
+	if err := stc.runOp(ctx, "traffic/start", in, nil); err != nil {
+		return fmt.Errorf("could not start traffic: %w", err)
+	}
 	return nil
 }
 
 // StartTraffic starts traffic for the StcAgent session based on the given flows.
 // If no flows are provided, starts the previously pushed flows.
 func (stc *stcATE) StartTraffic(ctx context.Context, flows []*opb.Flow) error {
+	if err := stc.startTraffic(ctx, flows); err != nil {
+		return err
+	}
+	stc.operState = operStateTrafficOn
 	return nil
 }
 
@@ -434,15 +435,14 @@ func (stc *stcATE) UpdateTraffic(ctx context.Context, flows []*opb.Flow) error {
 	if stc.operState != operStateTrafficOn {
 		return fmt.Errorf("cannot update traffic before it has been started")
 	}
-	if err := updateFlowsFn(ctx, stc, flows); err != nil {
+	if err := stc.updateFlows(ctx, flows); err != nil {
 		return fmt.Errorf("could not update running traffic flows: %w", err)
 	}
 	return nil
 }
 
 func (stc *stcATE) stopAllTraffic(ctx context.Context) error {
-	trafficArgs := stcweb.OpArgs{stc.c.Session().AbsPath("traffic")}
-	if err := stc.runOp(ctx, "traffic/stop", trafficArgs, nil); err != nil {
+	if err := stc.runOp(ctx, "traffic/stop", nil, nil); err != nil {
 		return fmt.Errorf("could not stop traffic: %w", err)
 	}
 	// Wait a sufficient amount of time to ensure that traffic is stopped.

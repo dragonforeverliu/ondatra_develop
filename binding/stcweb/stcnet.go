@@ -216,34 +216,6 @@ type Error struct {
 	InstanceRowValues   []map[string]string
 }
 
-// Errors returns the current errors/warnings for this session.
-func (s *Session) Errors(ctx context.Context) ([]*Error, error) {
-	const errEP = "/globals/appErrors/error"
-	var errors []*Error
-	if err := s.Get(ctx, errEP, &errors); err != nil {
-		return nil, fmt.Errorf("error fetching session errors: %w", err)
-	}
-	for _, e := range errors {
-		var instances []*struct {
-			DataRow []string `json:"sourceValues"`
-		}
-		if err := s.Get(ctx, path.Join(errEP, strconv.Itoa(e.ID), "instance"), &instances); err != nil {
-			return nil, fmt.Errorf("error fetching instances of error with ID %d: %w", e.ID, err)
-		}
-		for i, r := range instances {
-			if len(r.DataRow) != len(e.InstanceColumnNames) {
-				return nil, fmt.Errorf("incorrect number of data values for error instance %d of error %d", i, e.ID)
-			}
-			row := map[string]string{}
-			for j, col := range e.InstanceColumnNames {
-				row[col] = r.DataRow[j]
-			}
-			e.InstanceRowValues = append(e.InstanceRowValues, row)
-		}
-	}
-	return errors, nil
-}
-
 func (s *Session) jsonReq(ctx context.Context, method httpMethod, path string, in, out any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
