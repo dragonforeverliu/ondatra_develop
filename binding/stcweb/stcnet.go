@@ -118,25 +118,13 @@ func (n *StcAgent) FetchSessions(ctx context.Context) (map[int]*Session, error) 
 	return idToSession, nil
 }
 
-// DeleteSession deletes the StcAgent session with the specified ID.
+// DeleteSession deletes all the StcAgent sessions.
 // This is a noop if the session is already deleted.
-func (n *StcAgent) DeleteSession(ctx context.Context, id int) error {
-	spath := sessionPath(id)
-	stopErr := n.stcWeb.jsonReq(ctx, post, path.Join(spath, "operations/stop"), nil, nil)
-	// A 404 error on stop indicates the session was already deleted.
-	if stopErr != nil {
-		if strings.Contains(stopErr.Error(), "404") {
-			return nil
-		}
-		log.Warningf("Error stopping session, which may be due to another stop in progress: %v"+
-			"\nWill still attempt to delete the session.", stopErr)
-	}
-	if err := n.stcWeb.jsonReq(ctx, delete, spath, nil, nil); err != nil {
-		if stopErr != nil {
-			return fmt.Errorf("error deleting session after error stopping session: %w, %v", err, stopErr)
-		}
-		return fmt.Errorf("error deleting session: %w", err)
-	}
+func (n *StcAgent) DeleteSession(ctx context.Context) error {
+	deletesess := n.stcWeb.jsonReq(ctx, delete, sessionsPath, nil, nil)
+        if deletesess != nil {
+            return fmt.Errorf("error deleting session: %v", deletesess)
+        }
 	return nil
 }
 
