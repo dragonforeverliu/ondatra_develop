@@ -33,6 +33,7 @@ import (
 	"github.com/openconfig/ondatra/internal/stcconfig"
 
 	gpb "github.com/openconfig/gnmi/proto/gnmi"
+	msgpb "github.com/openconfig/ondatra/internal/stcate/proto"
 	opb "github.com/openconfig/ondatra/proto"
 )
 
@@ -222,33 +223,22 @@ func (stc *stcATE) runOp(ctx context.Context, path string, in any, out any) erro
 }
 
 func (stc *stcATE) pushTopology(ctx context.Context, top *Topology) error {
+	msg := msgpb.MsgTopology{
+		Interfaces: top.Interfaces,
+		Lags:       top.LAGs,
+	}
+	mv, err := proto.Marshal(&msg)
+	if err != nil {
+		return fmt.Errorf("could not push topology config: %w", err)
+	}
+	b64s := b64.StdEncoding.EncodeToString(mv)
 
 	in := struct {
-		Ate        binding.ATE `json:"ate"`
-		Interfaces []string    `json:"interfaces"`
-		LAGs       []string    `json:"lags"`
+		Topology string      `json:"topology"`
+		Device   binding.ATE `json:"device"`
 	}{
-		Ate: *stc.ate,
-	}
-
-	for _, v := range top.Interfaces {
-		mv, _ := proto.Marshal(v)
-		b64s := b64.StdEncoding.EncodeToString([]byte(mv))
-		in.Interfaces = append(in.Interfaces, b64s)
-
-		// check UnMarshal
-		log.Infof("original = ", v)
-		log.Infof("Marshal = ", mv)
-		log.Infof("b64s = ", b64s)
-		x := new(opb.InterfaceConfig)
-		er := proto.Unmarshal(mv, x)
-		log.Infof("Unmarshal = ", x, " error = ", er)
-	}
-
-	for _, v := range top.LAGs {
-		mv, _ := proto.Marshal(v)
-		b64s := b64.StdEncoding.EncodeToString([]byte(mv))
-		in.LAGs = append(in.LAGs, b64s)
+		Topology: b64s,
+		Device:   *stc.ate,
 	}
 
 	log.Infof("push Topology, in=", in)
@@ -256,46 +246,7 @@ func (stc *stcATE) pushTopology(ctx context.Context, top *Topology) error {
 	stc.top = top
 
 	if err := stc.runOp(ctx, "topology/push", in, nil); err != nil {
-		return fmt.Errorf("could not apply traffic config: %w", err)
-	}
-
-	log.Infof("Topology push successfully")
-	return nil
-}
-
-func (stc *stcATE) XpushTopology(ctx context.Context, top *Topology) error {
-
-	in := struct {
-		Ate        binding.ATE `json:"ate"`
-		Interfaces [][]byte    `json:"interfaces"`
-		LAGs       [][]byte    `json:"lags"`
-	}{
-		Ate: *stc.ate,
-	}
-
-	for _, v := range top.Interfaces {
-		mv, _ := proto.Marshal(v)
-		in.Interfaces = append(in.Interfaces, mv)
-
-		// check UnMarshal
-		log.Infof("original = ", v)
-		log.Infof("Marshal = ", mv)
-		x := new(opb.InterfaceConfig)
-		er := proto.Unmarshal(mv, x)
-		log.Infof("Unmarshal = ", x, " error = ", er)
-	}
-
-	for _, v := range top.LAGs {
-		mv, _ := proto.Marshal(v)
-		in.LAGs = append(in.LAGs, mv)
-	}
-
-	log.Infof("push Topology, in=", in)
-
-	stc.top = top
-
-	if err := stc.runOp(ctx, "topology/push", in, nil); err != nil {
-		return fmt.Errorf("could not apply traffic config: %w", err)
+		return fmt.Errorf("could not push topology config: %w", err)
 	}
 
 	log.Infof("Topology push successfully")
@@ -439,19 +390,28 @@ func genTraffic(ctx context.Context, stc *stcATE) error {
 	return nil
 }
 
-// updateFlows updates frame size/rate configuration for flows after generation.
+// updateTraffic updates frame size/rate configuration for flows after generation.
 // Assumes that StcAgent traffic items corresponding to the flows have updated
 // REST IDs.
-func (stc *stcATE) updateFlows(ctx context.Context, flows []*opb.Flow) error {
-	ate_bytes, _ := json.Marshal(stc.ate)
-	flows_bytes, _ := json.Marshal(flows)
-	in := struct {
-		Ate   string `json:"ate"`
-		Flows string `json:"flows"`
-	}{
-		Ate:   string(ate_bytes),
-		Flows: string(flows_bytes),
+func (stc *stcATE) updateTraffic(ctx context.Context, flows []*opb.Flow) error {
+	msg := msgpb.MsgTraffic{
+		Flows: flows,
 	}
+	mv, err := proto.Marshal(&msg)
+	if err != nil {
+		return fmt.Errorf("could not push topology config: %w", err)
+	}
+	b64s := b64.StdEncoding.EncodeToString(mv)
+
+	in := struct {
+		Traffic string      `json:"traffic"`
+		Device  binding.ATE `json:"device"`
+	}{
+		Traffic: b64s,
+		Device:  *stc.ate,
+	}
+
+	log.Infof("update Traffic, in=", in)
 
 	stc.flows = flows
 
@@ -470,15 +430,24 @@ func (stc *stcATE) applyTraffic(ctx context.Context) error {
 }
 
 func (stc *stcATE) startTraffic(ctx context.Context, flows []*opb.Flow) error {
-	ate_bytes, _ := json.Marshal(stc.ate)
-	flows_bytes, _ := json.Marshal(flows)
-	in := struct {
-		Ate   string `json:"ate"`
-		Flows string `json:"flows"`
-	}{
-		Ate:   string(ate_bytes),
-		Flows: string(flows_bytes),
+	msg := msgpb.MsgTraffic{
+		Flows: flows,
 	}
+	mv, err := proto.Marshal(&msg)
+	if err != nil {
+		return fmt.Errorf("could not push topology config: %w", err)
+	}
+	b64s := b64.StdEncoding.EncodeToString(mv)
+
+	in := struct {
+		Traffic string      `json:"traffic"`
+		Device  binding.ATE `json:"device"`
+	}{
+		Traffic: b64s,
+		Device:  *stc.ate,
+	}
+
+	log.Infof("start Traffic, in=", in)
 
 	stc.flows = flows
 
@@ -506,7 +475,7 @@ func (stc *stcATE) UpdateTraffic(ctx context.Context, flows []*opb.Flow) error {
 	if stc.operState != operStateTrafficOn {
 		return fmt.Errorf("cannot update traffic before it has been started")
 	}
-	if err := stc.updateFlows(ctx, flows); err != nil {
+	if err := stc.updateTraffic(ctx, flows); err != nil {
 		return fmt.Errorf("could not update running traffic flows: %w", err)
 	}
 	return nil
