@@ -231,14 +231,20 @@ func (stc *stcATE) pushTopology(ctx context.Context, top *Topology) error {
 	if err != nil {
 		return fmt.Errorf("could not push topology config: %w", err)
 	}
-	b64s := b64.StdEncoding.EncodeToString(mv)
+	top_b64s := b64.StdEncoding.EncodeToString(mv)
+
+	mv, err = json.Marshal(stc.ate)
+	if err != nil {
+		return fmt.Errorf("could not push topology config: %w", err)
+	}
+	dev_b64s := b64.StdEncoding.EncodeToString(mv)
 
 	in := struct {
-		Topology string      `json:"topology"`
-		Device   binding.ATE `json:"device"`
+		Topology string `json:"topology"`
+		Device   string `json:"device"`
 	}{
-		Topology: b64s,
-		Device:   *stc.ate,
+		Topology: top_b64s,
+		Device:   dev_b64s,
 	}
 
 	log.Infof("push Topology, in=", in)
@@ -401,14 +407,20 @@ func (stc *stcATE) updateTraffic(ctx context.Context, flows []*opb.Flow) error {
 	if err != nil {
 		return fmt.Errorf("could not push topology config: %w", err)
 	}
-	b64s := b64.StdEncoding.EncodeToString(mv)
+	flow_b64s := b64.StdEncoding.EncodeToString(mv)
+
+	mv, err = json.Marshal(stc.ate)
+	if err != nil {
+		return fmt.Errorf("could not push topology config: %w", err)
+	}
+	dev_b64s := b64.StdEncoding.EncodeToString(mv)
 
 	in := struct {
-		Traffic string      `json:"traffic"`
-		Device  binding.ATE `json:"device"`
+		Traffic string `json:"traffic"`
+		Device  string `json:"device"`
 	}{
-		Traffic: b64s,
-		Device:  *stc.ate,
+		Traffic: flow_b64s,
+		Device:  dev_b64s,
 	}
 
 	log.Infof("update Traffic, in=", in)
@@ -437,14 +449,20 @@ func (stc *stcATE) startTraffic(ctx context.Context, flows []*opb.Flow) error {
 	if err != nil {
 		return fmt.Errorf("could not push topology config: %w", err)
 	}
-	b64s := b64.StdEncoding.EncodeToString(mv)
+	flow_b64s := b64.StdEncoding.EncodeToString(mv)
+
+	mv, err = json.Marshal(stc.ate)
+	if err != nil {
+		return fmt.Errorf("could not push topology config: %w", err)
+	}
+	dev_b64s := b64.StdEncoding.EncodeToString(mv)
 
 	in := struct {
-		Traffic string      `json:"traffic"`
-		Device  binding.ATE `json:"device"`
+		Traffic string `json:"traffic"`
+		Device  string `json:"device"`
 	}{
-		Traffic: b64s,
-		Device:  *stc.ate,
+		Traffic: flow_b64s,
+		Device:  dev_b64s,
 	}
 
 	log.Infof("start Traffic, in=", in)
