@@ -247,3 +247,24 @@ func FetchOTGGNMI(ctx context.Context, ate binding.ATE) (gpb.GNMIClient, error) 
 	}
 	return c, nil
 }
+
+var (
+	ateGNMIMu sync.Mutex
+	ateGNMIs  = make(map[binding.ATE]gpb.GNMIClient)
+)
+
+// FetchATEGNMI fetches the cached ATE GNMI client for the specified ATE.
+func FetchATEGNMI(ctx context.Context, ate binding.ATE) (gpb.GNMIClient, error) {
+	ateGNMIMu.Lock()
+	defer ateGNMIMu.Unlock()
+	c, ok := ateGNMIs[ate]
+	if !ok {
+		var err error
+		c, err = ate.DialGNMI(ctx, CommonDialOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("error dialing ATE GNMI: %w", err)
+		}
+		ateGNMIs[ate] = c
+	}
+	return c, nil
+}

@@ -25,14 +25,21 @@ import (
 	"time"
 
 	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/local"
 	"google.golang.org/protobuf/proto"
 
 	log "github.com/golang/glog"
+	gcache "github.com/openconfig/gnmi/cache"
+	closer "github.com/openconfig/gocloser"
 	"github.com/openconfig/ondatra/binding"
 	"github.com/openconfig/ondatra/binding/stcweb"
+	"github.com/openconfig/ondatra/internal/rawapis"
 	"github.com/openconfig/ondatra/internal/stcconfig"
+	"github.com/openconfig/ondatra/internal/stcgnmi"
 
 	gpb "github.com/openconfig/gnmi/proto/gnmi"
+	"github.com/openconfig/gnmi/subscribe"
 	msgpb "github.com/openconfig/ondatra/internal/stcate/proto"
 	opb "github.com/openconfig/ondatra/proto"
 )
@@ -97,6 +104,16 @@ type session interface {
 	Get(context.Context, string, any) error
 	Patch(context.Context, string, any) error
 	Post(context.Context, string, any, any) error
+	Stats() stats
+}
+
+type stats interface {
+	Views(context.Context) (map[string]view, error)
+	ConfigEgressView(context.Context, []string, int) (*stcweb.StatView, error)
+}
+
+type view interface {
+	FetchTable(context.Context, ...string) (stcweb.StatTable, error)
 }
 
 type files interface {
@@ -119,6 +136,30 @@ func unwrapClient(c cfgClient) *stcconfig.Client {
 
 type sessionWrapper struct {
 	*stcweb.Session
+}
+
+func (sw *sessionWrapper) Stats() stats {
+	return &statsWrapper{sw.Session.Stats()}
+}
+
+type statsWrapper struct {
+	*stcweb.Stats
+}
+
+func (sw *statsWrapper) Views(ctx context.Context) (map[string]view, error) {
+	views, err := sw.Stats.Views(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[string]view, len(views))
+	for c, v := range views {
+		m[c] = &viewWrapper{v}
+	}
+	return m, nil
+}
+
+type viewWrapper struct {
+	*stcweb.StatView
 }
 
 // CfgComponents represents the physical ATE components in use for the session and
@@ -190,8 +231,12 @@ type stcATE struct {
 	// Operational state is updated as needed on successful API calls.
 	operState operState
 
-	mu sync.Mutex
-	// gclient *stcgnmi.Client
+	mu      sync.Mutex
+	gclient *stcgnmi.Client
+
+	ingressTrackFlows     []string
+	egressTrackFlowCounts map[string]int
+	convergenceTracking   bool
 
 	ate   *binding.ATE
 	top   *Topology
@@ -540,20 +585,117 @@ func (stc *stcATE) StopAllTraffic(ctx context.Context) error {
 	return nil
 }
 
-// FetchGNMI returns the GNMI client for the Stc.
-func (stc *stcATE) FetchGNMI(ctx context.Context) (gpb.GNMIClient, error) {
-	// stc.mu.Lock()
-	// defer stc.mu.Unlock()
-	// if stc.gclient == nil {
-	// 	gclient, err := stcgnmi.NewClient(ctx, stc.name, stc.readStats, unwrapClient(stc.c), rawapis.CommonDialOpts...)
-	// 	if err != nil {
-	// 		return nil, err
-	// 	}
-	// 	stc.gclient = gclient
-	// }
-	// return stc.gclient, nil
-	return nil, nil
+func (stc *stcATE) NewGnmiClient(ctx context.Context, name string, opts ...grpc.DialOption) (_ gpb.GNMIClient, rerr error) {
+	const statExpiration = 30 * time.Second
+	gc := gcache.New([]string{name})
+	srv := grpc.NewServer()
+	subSrv, err := subscribe.NewServer(gc)
+	if err != nil {
+		return nil, fmt.Errorf("cannot create new subscribe server: %w", err)
+	}
+	gc.SetClient(subSrv.Update)
+	gpb.RegisterGNMIServer(srv, subSrv)
+	lis, err := net.Listen("tcp", ":0")
+	if err != nil {
+		return nil, fmt.Errorf("cannot listen on an available port: %w", err)
+	}
+	defer closer.CloseOnErr(&rerr, lis.Close, "error closing listener")
+	go srv.Serve(lis)
+	addr := lis.Addr().String()
+
+	opts = append(opts, grpc.WithTransportCredentials(local.NewCredentials()))
+	log.Infof("NewGnmiClient, addr=", addr, " opts=", opts)
+
+	conn, err := grpc.DialContext(ctx, addr, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("DialContext(%s, nil, %v): %w", addr, opts, err)
+	}
+	defer closer.CloseOnErr(&rerr, conn.Close, "error closing gRPC connection")
+	return gpb.NewGNMIClient(conn), nil
 }
+
+// FetchGNMI returns the GNMI client for the Stc.
+func (stc *stcATE) FetchStcAgentGNMI(ctx context.Context) (gpb.GNMIClient, error) {
+	stc.mu.Lock()
+	defer stc.mu.Unlock()
+	if stc.gclient == nil {
+		gclient, err := stcgnmi.NewClient(ctx, stc.name, stc.readStats, unwrapClient(stc.c), rawapis.CommonDialOpts...)
+		if err != nil {
+			return nil, err
+		}
+		stc.gclient = gclient
+	}
+	return stc.gclient, nil
+}
+
+func (stc *stcATE) readStats(ctx context.Context, captions []string) (*stcgnmi.Stats, error) {
+	if len(stc.egressTrackFlowCounts) == 0 {
+		var cmod []string
+		for _, c := range captions {
+			if c != stcweb.EgressStatsCaption {
+				cmod = append(cmod, c)
+			}
+		}
+		captions = cmod
+	}
+	views, err := stc.c.Session().Stats().Views(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tables := make(map[string]stcweb.StatTable)
+	for _, cap := range captions {
+		view, ok := views[cap]
+		var table stcweb.StatTable
+		if ok {
+			var drilldowns []string
+			if cap == stcweb.TrafficItemStatsCaption && stc.convergenceTracking {
+				drilldowns = []string{"Drill down per Dest Endpoint", "Drill Down per Rx Port"}
+			}
+			table, err = view.FetchTable(ctx, drilldowns...)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			log.Warningf("No view with caption %q, got views %v", cap, views)
+		}
+		tables[cap] = table
+	}
+	if err != nil {
+		return nil, fmt.Errorf("error retrieving statistics for views %v: %w", captions, err)
+	}
+	var egressTrackFlows []string
+	for flow := range stc.egressTrackFlowCounts {
+		egressTrackFlows = append(egressTrackFlows, flow)
+	}
+	return &stcgnmi.Stats{
+		Tables:            tables,
+		IngressTrackFlows: stc.ingressTrackFlows,
+		EgressTrackFlows:  egressTrackFlows,
+	}, nil
+}
+
+// FlushStats will remove all data from the cache for the Ixia and marks all stats as stale.
+// This ensures that future telemetry calls attempt to fetch data and that stale data doesn't persist.
+func (stc *stcATE) FlushStats() {
+	stc.mu.Lock()
+	defer stc.mu.Unlock()
+	if stc.gclient != nil {
+		stc.gclient.Flush()
+	}
+}
+
+// func (stc *stcATE) FetchGNMI(ctx context.Context) (gpb.GNMIClient, error) {
+// 	stc.mu.Lock()
+// 	defer stc.mu.Unlock()
+// 	if stc.gclient == nil {
+// 		gclient, err := rawapis.FetchATEGNMI(ctx, *stc.ate)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		stc.gclient = &gclient
+// 	}
+// 	return *stc.gclient, nil
+// }
 
 func (stc *stcATE) applyOnTheFly(ctx context.Context) error {
 	in := struct{}{}
@@ -642,14 +784,6 @@ func validateIP(ipc *opb.IpConfig, desc string) error {
 		return fmt.Errorf("%s default gateway is not in CIDR range %s: %s", desc, addr, gway)
 	}
 	return nil
-}
-
-func (stc *stcATE) FlushStats() {
-	stc.mu.Lock()
-	defer stc.mu.Unlock()
-	// if stc.gclient != nil {
-	// 	stc.gclient.Flush()
-	// }
 }
 
 func (stc *stcATE) UpdateBGPPeerStates(ctx context.Context, ifs []*opb.InterfaceConfig) error {

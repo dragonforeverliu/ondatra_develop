@@ -171,7 +171,7 @@ func FetchGNMI(ctx context.Context, ate binding.ATE) (gpb.GNMIClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return stc.FetchGNMI(ctx)
+	return stc.FetchStcAgentGNMI(ctx)
 }
 
 // SetPortState sets the state of a specified interface on the ATE.

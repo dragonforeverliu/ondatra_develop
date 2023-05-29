@@ -122,9 +122,9 @@ func (n *StcAgent) FetchSessions(ctx context.Context) (map[int]*Session, error) 
 // This is a noop if the session is already deleted.
 func (n *StcAgent) DeleteSession(ctx context.Context) error {
 	deletesess := n.stcWeb.jsonReq(ctx, delete, sessionsPath, nil, nil)
-        if deletesess != nil {
-            return fmt.Errorf("error deleting session: %v", deletesess)
-        }
+	if deletesess != nil {
+		return fmt.Errorf("error deleting session: %v", deletesess)
+	}
 	return nil
 }
 
@@ -189,6 +189,16 @@ func (s *Session) Post(ctx context.Context, path string, in, out any) error {
 // Config returns the config API for this session.
 func (s *Session) Config() *Config {
 	return &Config{sess: s}
+}
+
+// Files returns the file API for this session.
+func (s *Session) Files() *Files {
+	return &Files{sess: s}
+}
+
+// Stats returns the statistics API for this session.
+func (s *Session) Stats() *Stats {
+	return &Stats{sess: s}
 }
 
 // Error represents an error reported by an StcAgent session.
